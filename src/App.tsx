@@ -18,6 +18,37 @@ function App() {
   const [page, setPage] = useState('overview');
   const [deviceTab, setDeviceTab] = useState<'streetlight' | 'wifi' | 'hydrant'>('streetlight');
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<any>)?.detail as
+        | {
+            page?: string;
+            tab?: 'streetlight' | 'wifi' | 'hydrant';
+            selectedId?: string;
+          }
+        | undefined;
+
+      if (!detail) return;
+
+      if (detail.page) {
+        setPage(detail.page);
+      }
+
+      if (detail.page === 'devices') {
+        if (detail.tab) setDeviceTab(detail.tab);
+
+        if (detail.selectedId) {
+          if (detail.tab === 'streetlight') setSelectedStreetId(detail.selectedId);
+          if (detail.tab === 'wifi') setSelectedWifiId(detail.selectedId);
+          if (detail.tab === 'hydrant') setSelectedHydrantId(detail.selectedId);
+        }
+      }
+    };
+
+    window.addEventListener('app:navigate', handler as EventListener);
+    return () => window.removeEventListener('app:navigate', handler as EventListener);
+  }, []);
+
   // ===== 1. Toggle Panel (เปิด/ปิด) =====
   const [isPanelOpen, setIsPanelOpen] = useState(false); 
 

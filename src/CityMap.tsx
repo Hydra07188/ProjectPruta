@@ -332,9 +332,8 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
           ],
           {
             color: typeColor,
-            weight: 3,
-            opacity: 0.65,
-            dashArray: '6 8',
+            weight: 2,
+            opacity: 0.7,
             lineCap: 'round',
             interactive: false,
           }
@@ -418,6 +417,15 @@ const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
           >
             📢 แจ้งซ่อมแซม / ร้องเรียน
           </button>
+
+          <button
+            class="goto-devices-btn"
+            style="width: 100%; padding: 10px; background-color: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2); margin-top: 10px;"
+            onmouseover="this.style.backgroundColor='#2563eb'"
+            onmouseout="this.style.backgroundColor='#3b82f6'"
+          >
+            🧭 ไปหน้าอุปกรณ์
+          </button>
         </div>
 
       </div>
@@ -451,7 +459,27 @@ const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
           reportBtn.addEventListener('click', () => {
             alert(`เตรียมส่งข้อมูลไปหน้าแจ้งซ่อม!\n\nรหัสอุปกรณ์: ${device.id}\nชื่อ: ${device.name}\nสถานะ: ${statusLabels[device.status]}`);
             marker.closePopup();
-          });
+          }, { once: true });
+        }
+
+        const gotoDevicesBtn = popupElement.querySelector('.goto-devices-btn');
+        if (gotoDevicesBtn) {
+          gotoDevicesBtn.addEventListener('click', () => {
+            const tab = (device.type === 'wifi' || device.type === 'hydrant' || device.type === 'streetlight')
+              ? (device.type as 'wifi' | 'hydrant' | 'streetlight')
+              : 'streetlight';
+
+            window.dispatchEvent(
+              new CustomEvent('app:navigate', {
+                detail: {
+                  page: 'devices',
+                  tab,
+                  selectedId: device.id,
+                },
+              })
+            );
+            marker.closePopup();
+          }, { once: true });
         }
       }
     });
