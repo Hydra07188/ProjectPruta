@@ -86,8 +86,12 @@ const WifiSpot: React.FC<Props> = ({ selectedId }) => {
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors',
-                maxZoom: 19
-            }).addTo(map);
+                maxZoom: 19,
+                keepBuffer: 4,
+                updateWhenIdle: true,
+                updateWhenZooming: false,
+                unloadInvisibleTiles: false,
+            } as any).addTo(map);
         } else {
             mapRef.current.setView([lat, lng], 16);
         }
@@ -126,9 +130,41 @@ const WifiSpot: React.FC<Props> = ({ selectedId }) => {
                 <p style="margin: 4px 0; font-size: 0.875rem;">
                     <strong>สถานะ:</strong> ${selected.STATUS || '-'}
                 </p>
+
+                <button
+                  class="goto-devices-btn"
+                  style="width: 100%; margin-top: 10px; padding: 8px 10px; background-color: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 700; font-family: inherit;"
+                  onmouseover="this.style.backgroundColor='#2563eb'"
+                  onmouseout="this.style.backgroundColor='#3b82f6'"
+                >
+                                                                        🗺️ ไปที่ภาพรวม
+                </button>
             </div>
         `;
         marker.bindPopup(popupContent);
+
+        marker.on('popupopen', (e) => {
+            const popupElement = e.popup.getElement();
+            if (!popupElement) return;
+
+            const gotoBtn = popupElement.querySelector('.goto-devices-btn');
+            if (!gotoBtn) return;
+
+            gotoBtn.addEventListener(
+                'click',
+                () => {
+                    window.dispatchEvent(
+                        new CustomEvent('app:navigate', {
+                            detail: {
+                                page: 'overview',
+                            },
+                        })
+                    );
+                    marker.closePopup();
+                },
+                { once: true }
+            );
+        });
 
         return () => {
             if (mapRef.current) {

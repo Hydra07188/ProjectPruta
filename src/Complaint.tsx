@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import './Complaint.css';
 import { 
   Home, MessageCircle, Lightbulb, Wifi, Droplet, 
-  Search, Filter, Eye, Edit, Trash2, ChevronLeft,
+  Eye, Edit, Trash2,
   Check, X // ✅ เพิ่มไอคอน Check (บันทึก) และ X (ยกเลิก)
 } from 'lucide-react';
 import './Sidebar.css'; 

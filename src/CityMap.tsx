@@ -19,6 +19,8 @@ interface CityMapProps {
   onAddPosition?: (lat: number, lng: number) => void;
   addMode?: boolean;
   showRanges?: boolean;
+  /** แสดงเส้นร่างเชื่อม “หมุดแบบร่าง” ประเภทเดียวกัน */
+  showConnections?: boolean;
 }
 
 export interface CityDevice {
@@ -32,6 +34,8 @@ export interface CityDevice {
   description?: string;
   /** ระยะครอบคลุมของอุปกรณ์ (เมตร) ถ้ามีจะ override ค่า default ตาม type */
   rangeMeters?: number;
+  /** หมุดแบบร่าง: แสดงเป็นสี่เหลี่ยม + ใช้สำหรับวาดเส้นร่างเชื่อมกัน */
+  sketchPin?: boolean;
 }
 
 // กำหนดสีและไอคอนสำหรับแต่ละประเภทอุปกรณ์
@@ -66,12 +70,17 @@ const deviceIcons: Record<string, { color: string; icon: string; label: string }
 // สถานะอุปกรณ์
 const statusLabels = sharedStatusLabels;
 
-function CityMap({ devices, loading = false, onAddPosition, addMode = false, showRanges = true }: CityMapProps) {
+function CityMap({ devices, loading = false, onAddPosition, addMode = false, showRanges = true, showConnections = true }: CityMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const tempMarkerRef = useRef<L.Marker | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
   const rangeLayerRef = useRef<L.LayerGroup | null>(null);
+  const connectionLayerRef = useRef<L.LayerGroup | null>(null);
+  const baseLayersRef = useRef<{ osm: L.TileLayer; satellite: L.TileLayer } | null>(null);
+  const layersControlRef = useRef<L.Control.Layers | null>(null);
+
+  const BASE_LAYER_STORAGE_KEY = 'citymap:baseLayer';
 
   const [isTilesLoading, setIsTilesLoading] = useState(true);
   const [hasInitialTilesLoaded, setHasInitialTilesLoaded] = useState(false);
@@ -139,23 +148,91 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
     const map = L.map(mapContainerRef.current).setView([13.7367, 100.5332], 13);
     mapRef.current = map;
 
-    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    // --- Base layers (2D / Satellite) ---
+    // Keep already-loaded tiles in memory (avoid reloading when zooming/panning back)
+    // and preload a small buffer outside the viewport.
+    const sharedTileOptions = {
       maxZoom: 19,
+      keepBuffer: 4,
+      updateWhenIdle: true,
+      updateWhenZooming: false,
+      unloadInvisibleTiles: false,
+    } as any;
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      ...sharedTileOptions,
     });
 
-    // Loading indicator for map tiles
+    // Esri World Imagery (Satellite)
+    const satellite = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+        ...sharedTileOptions,
+      }
+    );
+
+    baseLayersRef.current = { osm, satellite };
+
+    // Loading indicator for map tiles (bind to both; events fire for the active base layer)
     setIsTilesLoading(true);
-    tiles.on('loading', () => setIsTilesLoading(true));
-    tiles.on('load', () => {
+    const handleLoading = () => setIsTilesLoading(true);
+    const handleLoad = () => {
       setHasInitialTilesLoaded(true);
       setIsTilesLoading(false);
+    };
+    const handleTileError = () => setIsTilesLoading(false);
+
+    [osm, satellite].forEach((layer) => {
+      layer.on('loading', handleLoading);
+      layer.on('load', handleLoad);
+      layer.on('tileerror', handleTileError);
     });
-    tiles.on('tileerror', () => setIsTilesLoading(false));
 
-    tiles.addTo(map);
+    // Default base layer: restore last choice (2D / Satellite)
+    const saved = (() => {
+      try {
+        return window.localStorage.getItem(BASE_LAYER_STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    })();
 
+    const initialBase: 'osm' | 'satellite' = saved === 'satellite' ? 'satellite' : 'osm';
+    if (initialBase === 'satellite') {
+      satellite.addTo(map);
+    } else {
+      osm.addTo(map);
+    }
+
+    // Layer switch control (similar to Google Maps 2D/Satellite toggle)
+    const control = L.control.layers(
+      {
+        '2D (แผนที่)': osm,
+        'ดาวเทียม': satellite,
+      },
+      undefined,
+      { position: 'bottomleft' }
+    );
+    control.addTo(map);
+    layersControlRef.current = control;
+
+    // When switching base layers, reflect loading state immediately
+    map.on('baselayerchange', (e: any) => {
+      setIsTilesLoading(true);
+
+      const nextBase: 'osm' | 'satellite' = e?.layer === satellite ? 'satellite' : 'osm';
+      try {
+        window.localStorage.setItem(BASE_LAYER_STORAGE_KEY, nextBase);
+      } catch {
+        // ignore storage errors (private mode / blocked)
+      }
+    });
+
+    // order matters: ranges (bottom) -> connections -> markers (top)
     rangeLayerRef.current = L.layerGroup().addTo(map);
+    connectionLayerRef.current = L.layerGroup().addTo(map);
     markerLayerRef.current = L.layerGroup().addTo(map);
 
     return () => {
@@ -165,9 +242,74 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
       }
       markerLayerRef.current = null;
       rangeLayerRef.current = null;
+      connectionLayerRef.current = null;
       tempMarkerRef.current = null;
+      baseLayersRef.current = null;
+      layersControlRef.current = null;
     };
   }, []);
+
+  const haversineMeters = (a: Pick<CityDevice, 'lat' | 'lng'>, b: Pick<CityDevice, 'lat' | 'lng'>): number => {
+    // ระยะทางโดยประมาณบนผิวโลก (เมตร)
+    const R = 6371000;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+
+    const sinDLat = Math.sin(dLat / 2);
+    const sinDLng = Math.sin(dLng / 2);
+    const h = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  };
+
+  type ConnectionSegment = { type: string; from: CityDevice; to: CityDevice };
+
+  const buildTypeMstConnections = (inputDevices: CityDevice[]): ConnectionSegment[] => {
+    // สร้างเส้นเชื่อมแบบ MST แยกตาม type: เชื่อมครบทุกจุด แต่จำนวนเส้นน้อยที่สุด (n-1)
+    const byType = new Map<string, CityDevice[]>();
+    inputDevices.forEach((d) => {
+      const list = byType.get(d.type) ?? [];
+      list.push(d);
+      byType.set(d.type, list);
+    });
+
+    const segments: ConnectionSegment[] = [];
+    for (const [type, list] of byType.entries()) {
+      if (list.length < 2) continue;
+
+      const inTree = new Array<boolean>(list.length).fill(false);
+      inTree[0] = true;
+      let inCount = 1;
+
+      // Prim's algorithm (O(n^2)) — เหมาะกับจำนวนหมุดระดับหลักสิบ/ร้อย
+      while (inCount < list.length) {
+        let bestFrom = -1;
+        let bestTo = -1;
+        let bestDist = Number.POSITIVE_INFINITY;
+
+        for (let i = 0; i < list.length; i++) {
+          if (!inTree[i]) continue;
+          for (let j = 0; j < list.length; j++) {
+            if (inTree[j]) continue;
+            const dist = haversineMeters(list[i], list[j]);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestFrom = i;
+              bestTo = j;
+            }
+          }
+        }
+
+        if (bestFrom === -1 || bestTo === -1) break;
+        inTree[bestTo] = true;
+        inCount++;
+        segments.push({ type, from: list[bestFrom], to: list[bestTo] });
+      }
+    }
+    return segments;
+  };
 
   // Show map loading overlay only if initial tiles take longer than 3 seconds
   useEffect(() => {
@@ -235,10 +377,12 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
     const map = mapRef.current;
     const markerLayer = markerLayerRef.current;
     const rangeLayer = rangeLayerRef.current;
-    if (!map || !markerLayer || !rangeLayer) return;
+    const connectionLayer = connectionLayerRef.current;
+    if (!map || !markerLayer || !rangeLayer || !connectionLayer) return;
 
     markerLayer.clearLayers();
     rangeLayer.clearLayers();
+    connectionLayer.clearLayers();
 
     visibleDevices.forEach((device) => {
       if (showRanges) {
@@ -246,6 +390,28 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
       }
       addDeviceMarker(markerLayer, device);
     });
+
+    if (showConnections) {
+      const sketchDevices = visibleDevices.filter((d) => d.sketchPin);
+      const segments = buildTypeMstConnections(sketchDevices);
+      segments.forEach((seg) => {
+        const typeColor = deviceIcons[seg.type]?.color;
+        if (!typeColor) return;
+        L.polyline(
+          [
+            [seg.from.lat, seg.from.lng],
+            [seg.to.lat, seg.to.lng],
+          ],
+          {
+            color: typeColor,
+            weight: 2,
+            opacity: 0.7,
+            lineCap: 'round',
+            interactive: false,
+          }
+        ).addTo(connectionLayer);
+      });
+    }
 
     // Update center based on visible devices
     if (visibleDevices.length > 0) {
@@ -259,7 +425,7 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
       centerLng /= visibleDevices.length;
       map.setView([centerLat, centerLng], 14);
     }
-  }, [visibleDevices, showRanges]);
+  }, [visibleDevices, showRanges, showConnections]);
 
 const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
     const deviceInfo = deviceIcons[device.type];
@@ -267,10 +433,12 @@ const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
     
     const markerColor = statusColors[device.status];
 
+    const markerContainerClass = device.sketchPin ? 'marker-container marker-container--sketch' : 'marker-container';
+
     const customIcon = L.divIcon({
       className: 'custom-marker',
       html: `
-        <div class="marker-container" style="background-color: ${markerColor}">
+        <div class="${markerContainerClass}" style="background-color: ${markerColor}">
           <span class="marker-icon">${deviceInfo.icon}</span>
         </div>
       `,
@@ -321,6 +489,15 @@ const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
           >
             📢 แจ้งซ่อมแซม / ร้องเรียน
           </button>
+
+          <button
+            class="goto-devices-btn"
+            style="width: 100%; padding: 10px; background-color: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2); margin-top: 10px;"
+            onmouseover="this.style.backgroundColor='#2563eb'"
+            onmouseout="this.style.backgroundColor='#3b82f6'"
+          >
+            🧭 ไปหน้าอุปกรณ์
+          </button>
         </div>
 
       </div>
@@ -354,7 +531,27 @@ const addDeviceMarker = (layer: L.LayerGroup, device: CityDevice) => {
           reportBtn.addEventListener('click', () => {
             alert(`เตรียมส่งข้อมูลไปหน้าแจ้งซ่อม!\n\nรหัสอุปกรณ์: ${device.id}\nชื่อ: ${device.name}\nสถานะ: ${statusLabels[device.status]}`);
             marker.closePopup();
-          });
+          }, { once: true });
+        }
+
+        const gotoDevicesBtn = popupElement.querySelector('.goto-devices-btn');
+        if (gotoDevicesBtn) {
+          gotoDevicesBtn.addEventListener('click', () => {
+            const tab = (device.type === 'wifi' || device.type === 'hydrant' || device.type === 'streetlight')
+              ? (device.type as 'wifi' | 'hydrant' | 'streetlight')
+              : 'streetlight';
+
+            window.dispatchEvent(
+              new CustomEvent('app:navigate', {
+                detail: {
+                  page: 'devices',
+                  tab,
+                  selectedId: device.id,
+                },
+              })
+            );
+            marker.closePopup();
+          }, { once: true });
         }
       }
     });
