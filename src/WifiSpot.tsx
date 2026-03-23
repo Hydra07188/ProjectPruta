@@ -86,8 +86,12 @@ const WifiSpot: React.FC<Props> = ({ selectedId }) => {
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors',
-                maxZoom: 19
-            }).addTo(map);
+                maxZoom: 19,
+                keepBuffer: 4,
+                updateWhenIdle: true,
+                updateWhenZooming: false,
+                unloadInvisibleTiles: false,
+            } as any).addTo(map);
         } else {
             mapRef.current.setView([lat, lng], 16);
         }

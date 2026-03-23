@@ -77,6 +77,10 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
   const rangeLayerRef = useRef<L.LayerGroup | null>(null);
   const connectionLayerRef = useRef<L.LayerGroup | null>(null);
+  const baseLayersRef = useRef<{ osm: L.TileLayer; satellite: L.TileLayer } | null>(null);
+  const layersControlRef = useRef<L.Control.Layers | null>(null);
+
+  const BASE_LAYER_STORAGE_KEY = 'citymap:baseLayer';
 
   const [isTilesLoading, setIsTilesLoading] = useState(true);
   const [hasInitialTilesLoaded, setHasInitialTilesLoaded] = useState(false);
@@ -144,21 +148,87 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
     const map = L.map(mapContainerRef.current).setView([13.7367, 100.5332], 13);
     mapRef.current = map;
 
-    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    // --- Base layers (2D / Satellite) ---
+    // Keep already-loaded tiles in memory (avoid reloading when zooming/panning back)
+    // and preload a small buffer outside the viewport.
+    const sharedTileOptions = {
       maxZoom: 19,
+      keepBuffer: 4,
+      updateWhenIdle: true,
+      updateWhenZooming: false,
+      unloadInvisibleTiles: false,
+    } as any;
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      ...sharedTileOptions,
     });
 
-    // Loading indicator for map tiles
+    // Esri World Imagery (Satellite)
+    const satellite = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+        ...sharedTileOptions,
+      }
+    );
+
+    baseLayersRef.current = { osm, satellite };
+
+    // Loading indicator for map tiles (bind to both; events fire for the active base layer)
     setIsTilesLoading(true);
-    tiles.on('loading', () => setIsTilesLoading(true));
-    tiles.on('load', () => {
+    const handleLoading = () => setIsTilesLoading(true);
+    const handleLoad = () => {
       setHasInitialTilesLoaded(true);
       setIsTilesLoading(false);
-    });
-    tiles.on('tileerror', () => setIsTilesLoading(false));
+    };
+    const handleTileError = () => setIsTilesLoading(false);
 
-    tiles.addTo(map);
+    [osm, satellite].forEach((layer) => {
+      layer.on('loading', handleLoading);
+      layer.on('load', handleLoad);
+      layer.on('tileerror', handleTileError);
+    });
+
+    // Default base layer: restore last choice (2D / Satellite)
+    const saved = (() => {
+      try {
+        return window.localStorage.getItem(BASE_LAYER_STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    })();
+
+    const initialBase: 'osm' | 'satellite' = saved === 'satellite' ? 'satellite' : 'osm';
+    if (initialBase === 'satellite') {
+      satellite.addTo(map);
+    } else {
+      osm.addTo(map);
+    }
+
+    // Layer switch control (similar to Google Maps 2D/Satellite toggle)
+    const control = L.control.layers(
+      {
+        '2D (แผนที่)': osm,
+        'ดาวเทียม': satellite,
+      },
+      undefined,
+      { position: 'bottomleft' }
+    );
+    control.addTo(map);
+    layersControlRef.current = control;
+
+    // When switching base layers, reflect loading state immediately
+    map.on('baselayerchange', (e: any) => {
+      setIsTilesLoading(true);
+
+      const nextBase: 'osm' | 'satellite' = e?.layer === satellite ? 'satellite' : 'osm';
+      try {
+        window.localStorage.setItem(BASE_LAYER_STORAGE_KEY, nextBase);
+      } catch {
+        // ignore storage errors (private mode / blocked)
+      }
+    });
 
     // order matters: ranges (bottom) -> connections -> markers (top)
     rangeLayerRef.current = L.layerGroup().addTo(map);
@@ -174,6 +244,8 @@ function CityMap({ devices, loading = false, onAddPosition, addMode = false, sho
       rangeLayerRef.current = null;
       connectionLayerRef.current = null;
       tempMarkerRef.current = null;
+      baseLayersRef.current = null;
+      layersControlRef.current = null;
     };
   }, []);
 

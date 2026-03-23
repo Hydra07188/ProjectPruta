@@ -265,3 +265,13 @@
   width: 280px !important;
   line-height: inherit;
 }
+
+/* วางปุ่มสลับเลย์เอาต์ (2D/ดาวเทียม) บริเวณล่างซ้ายข้าง legend */
+.city-map-container .leaflet-bottom.leaflet-left {
+  margin-left: 20px;
+  margin-bottom: 30px;
+}
+
+.city-map-container .leaflet-bottom.leaflet-left .leaflet-control-layers {
+  margin-left: 240px;
+}
